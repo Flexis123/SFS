@@ -71,14 +71,13 @@ static struct sfs_entry* find_entry_in_dir(char* filename, struct sfs_entry* roo
     struct sfs_entry* entries = root_entries;
     for(unsigned i = 0; i < n_entries; i++)
     {
-        if(entries->filename == filename) return entries;
-        entries++;
+        if(strcmp(entries[i].filename, filename) == 0) return &entries[i];
     }
     return NULL;
 }
 
-static int get_entry(const char *path, struct sfs_entry *ret_entry,
-                     unsigned *ret_entry_off)
+static int get_entry(const char *path, struct sfs_entry **ret_entry,
+                     unsigned **ret_entry_off)
 {
     /* Get the next component of the path. Make sure to not modify path if it is
      * the value passed by libfuse (i.e., make a copy). Note that strtok
@@ -91,28 +90,34 @@ static int get_entry(const char *path, struct sfs_entry *ret_entry,
      * path, return it. If there are more parts remaining, recurse to handle
      * that subdirectory. */
 
+    *ret_entry = malloc(SFS_ROOTDIR_SIZE);
+    disk_read(*ret_entry, SFS_ROOTDIR_SIZE, SFS_ROOTDIR_OFF);
+
+    if(strcmp(path, "/") == 0) return 0;
+
     char* cpy_path = strdup(path);
     char* fname = strtok(cpy_path, "/");
 
-    struct sfs_entry* fentries = malloc(SFS_ROOTDIR_SIZE);
-    disk_read(fentries, SFS_ROOTDIR_SIZE, SFS_ROOTDIR_OFF);
-
-    ret_entry = find_entry_in_dir(fname, fentries, SFS_ROOTDIR_NENTRIES);
+    struct sfs_entry *prev_ret_entry = *ret_entry;
+    *ret_entry = find_entry_in_dir(fname, *ret_entry, SFS_ROOTDIR_NENTRIES);
     fname = strtok(NULL, "/");
 
     while(fname != NULL && ret_entry != NULL)
     {
-        disk_read(fentries, SFS_DIR_SIZE, SFS_DATA_OFF + ret_entry->first_block * SFS_BLOCK_SIZE);
+        disk_read(*ret_entry, SFS_DIR_SIZE, SFS_DATA_OFF + (*ret_entry)->first_block * SFS_BLOCK_SIZE);
 
-        ret_entry = find_entry_in_dir(fname, fentries, SFS_DIR_SIZE);
+        prev_ret_entry = *ret_entry;
+        *ret_entry = find_entry_in_dir(fname, *ret_entry, SFS_DIR_SIZE);
         fname = strtok(NULL, "/");
     }
 
     int ret;
-    if(ret_entry != NULL) ret = 0;
-    else ret =  -ENOENT;
+    if(*ret_entry != NULL) ret = 0;
+    else {
+        ret = -ENOENT;
+        *ret_entry = prev_ret_entry;
+    }
 
-    free(fentries);
     return ret;
 }
 
@@ -143,14 +148,13 @@ static int sfs_getattr(const char *path,
     st->st_atime = time(NULL);
     st->st_mtime = time(NULL);
 
-    struct sfs_entry entry;
-    unsigned off = 0;
+    struct sfs_entry *entry = NULL;
 
-    if (get_entry(path, &entry, &off) == 0) 
+    res = get_entry(path, &entry, NULL);
+    if (res == 0) 
     {
-
         // check if its a directory or a file;
-        int is_dir = entry.size && SFS_DIRECTORY;
+        int is_dir = entry->size & SFS_DIRECTORY || strcmp(path, "/") == 0;
         if(is_dir)
         {
             st->st_mode = S_IFDIR | BASE_PERMS;
@@ -159,14 +163,10 @@ static int sfs_getattr(const char *path,
         else
         {
             st->st_mode = S_IFREG | BASE_PERMS;
-            st->st_size = entry.size && SFS_SIZEMASK;
+            st->st_size = entry->size & SFS_SIZEMASK;
+            st->st_nlink = 1;
         }
     } 
-    else 
-    {
-        res = -ENOENT;
-    }
-
     return res;
 }
 
@@ -185,11 +185,18 @@ static int sfs_readdir(const char *path,
                        off_t offset,
                        struct fuse_file_info *fi)
 {
-    (void)offset, (void)fi;
     log("readdir %s\n", path);
 
-    (void)filler; /* Placeholder - use me */
-    (void)buf; /* Placeholder - use me */
+    (void) offset; (void) fi;
+
+    struct sfs_entry* dir = NULL;
+    if(get_entry(path, &dir, NULL) == 0)
+    {
+        for(unsigned i = 0; i < SFS_ROOTDIR_NENTRIES; i++) {
+            if(strlen(dir[i].filename) > 0) filler(buf, dir[i].filename, NULL, 0);
+        }
+        return 0;
+    }
     
     return -ENOSYS;
 }
@@ -211,9 +218,40 @@ static int sfs_read(const char *path,
     (void)fi;
     log("read %s size=%zu offset=%ld\n", path, size, offset);
 
-    (void)buf; /* Placeholder - use me */
+    struct sfs_entry *file = NULL;
+    
+    int res = get_entry(path, &file, NULL);
+    log("res %d\n", res);
+    if(res == 0)
+    {
+        blockidx_t curr_block = file->first_block;
+        size_t read = 0;
+        size_t prev_size = size;
 
-    return -ENOSYS;
+        while(curr_block != SFS_BLOCKIDX_END)
+        {
+            disk_read(buf, SFS_BLOCK_SIZE, SFS_DATA_OFF + curr_block * SFS_BLOCK_SIZE);
+            buf += SFS_BLOCK_SIZE;
+            read += SFS_BLOCK_SIZE;
+
+            prev_size = size;
+            size -= SFS_BLOCK_SIZE;
+
+            disk_read(&curr_block, sizeof(blockidx_t), SFS_BLOCKTBL_OFF + curr_block * sizeof(blockidx_t));
+            if(prev_size < size)
+            {
+                disk_read(buf, prev_size, SFS_DATA_OFF + curr_block * SFS_BLOCK_SIZE);
+                read += prev_size;
+                break;
+            }
+        }
+
+        buf -= read;
+        log("%s\n", buf);
+        return read;
+    }
+
+    return res;
 }
 
 
@@ -228,7 +266,18 @@ static int sfs_mkdir(const char *path,
 {
     log("mkdir %s mode=%o\n", path, mode);
 
-    return -ENOSYS;
+    // check if entry exists already
+
+    struct sfs_entry* dir;
+    int res = get_entry(path, &dir, NULL);
+
+    if(res == 0) res = -EEXIST;
+    else
+    {
+        //create directory
+    }
+
+    return res;
 }
 
 

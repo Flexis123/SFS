@@ -58,6 +58,7 @@
 /* Bitsmasks in the size field of directory entries. */
 #define SFS_SIZEMASK        ((1u << 28) - 1) /* Mask away top 4 bits (flags) */
 #define SFS_DIRECTORY       (1u << 31)
+#define SFS_IS_ROOT         (1u << 30)
 
 #define SFS_FILENAME_MAX    58u
 
