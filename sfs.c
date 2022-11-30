@@ -65,7 +65,6 @@ const char* __asan_default_options() { return "detect_leaks=0"; }
  * the disk, which will help in calculating ret_entry_off.
  */
 
-
 static struct sfs_entry* find_entry_in_dir(char* filename, struct sfs_entry* root_entries, unsigned n_entries)
 {
     struct sfs_entry* entries = root_entries;
@@ -230,24 +229,24 @@ static int sfs_read(const char *path,
 
         while(curr_block != SFS_BLOCKIDX_END)
         {
-            disk_read(buf, SFS_BLOCK_SIZE, SFS_DATA_OFF + curr_block * SFS_BLOCK_SIZE);
-            buf += SFS_BLOCK_SIZE;
-            read += SFS_BLOCK_SIZE;
 
             prev_size = size;
             size -= SFS_BLOCK_SIZE;
 
-            disk_read(&curr_block, sizeof(blockidx_t), SFS_BLOCKTBL_OFF + curr_block * sizeof(blockidx_t));
             if(prev_size < size)
             {
                 disk_read(buf, prev_size, SFS_DATA_OFF + curr_block * SFS_BLOCK_SIZE);
                 read += prev_size;
                 break;
             }
+
+            disk_read(buf, SFS_BLOCK_SIZE, SFS_DATA_OFF + curr_block * SFS_BLOCK_SIZE);
+            buf += SFS_BLOCK_SIZE;
+            read += SFS_BLOCK_SIZE;
+
+            disk_read(&curr_block, sizeof(blockidx_t), SFS_BLOCKTBL_OFF + curr_block * sizeof(blockidx_t));
         }
 
-        buf -= read;
-        log("%s\n", buf);
         return read;
     }
 
