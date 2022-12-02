@@ -41,15 +41,13 @@ struct sfs_entry find_entry(struct sfs_entry* entries, unsigned entries_n, char*
 {
     for(unsigned i = 0; i < entries_n; i++)
     {
-        if(strlen(entries[i].filename)) log("%s ", entries[i].filename);
         if(strcmp(entries[i].filename, entry_fname) == 0)
         {
             *pos = i;
-            log("\n");
+           
             return entries[i];
         }
     }
-    log("\n");
     *pos = -1;
 
     struct sfs_entry ret;
@@ -60,7 +58,8 @@ struct sfs_entry find_entry(struct sfs_entry* entries, unsigned entries_n, char*
 static int get_entry(const char *path, struct sfs_entry *ret_entry,
                      unsigned *ret_entry_off, unsigned* ret_level_reached)
 {
-    
+    int res = 0;
+
     char* entry_fname = strtok(strdup(path), "/");
     unsigned off = SFS_ROOTDIR_OFF;
     unsigned level_reached = 0;
@@ -74,19 +73,25 @@ static int get_entry(const char *path, struct sfs_entry *ret_entry,
         disk_read(entries, SFS_ROOTDIR_SIZE, off);
         *ret_entry = find_entry(entries, SFS_ROOTDIR_NENTRIES, entry_fname, &pos);
 
-        if(pos == -1) return -ENOENT;
-        off = SFS_DATA_OFF + ret_entry->first_block * SFS_BLOCK_SIZE;
-        
-        while((entry_fname = strtok(NULL, "/")))
+        if(pos == -1) res = -ENOENT;
+        else
         {
-            level_reached++;
-            disk_read(entries, SFS_DIR_SIZE, off);
-            *ret_entry = find_entry(entries, SFS_DIR_NENTRIES, entry_fname, &pos);
-
-            if(pos == -1) return -ENOENT;
             off = SFS_DATA_OFF + ret_entry->first_block * SFS_BLOCK_SIZE;
-        }
         
+            while((entry_fname = strtok(NULL, "/")))
+            {
+                level_reached++;
+                disk_read(entries, SFS_DIR_SIZE, off);
+                *ret_entry = find_entry(entries, SFS_DIR_NENTRIES, entry_fname, &pos);
+
+                if(pos == -1) 
+                {
+                    res = -ENOENT;
+                    break;
+                }
+                off = SFS_DATA_OFF + ret_entry->first_block * SFS_BLOCK_SIZE;
+            }
+        }
     }
     else
     {
@@ -98,7 +103,7 @@ static int get_entry(const char *path, struct sfs_entry *ret_entry,
     if(ret_entry_off != NULL) *ret_entry_off = off;
     if(ret_level_reached != NULL) *ret_level_reached = level_reached;
     
-    return 0;
+    return res;
 }
 
 
@@ -190,17 +195,16 @@ static int sfs_readdir(const char *path,
             dir_length = SFS_DIR_NENTRIES;
             disk_read(dir_entries, SFS_DIR_SIZE, SFS_DATA_OFF + dir.first_block * SFS_BLOCK_SIZE);
         }
-    }
-    else return -ENOSYS;
 
-    for (unsigned i = 0; i < dir_length; i++)
-    {
-        if(strlen(dir_entries[i].filename) > 0)
+        for (unsigned i = 0; i < dir_length; i++)
         {
-            filler(buf, dir_entries[i].filename, NULL, 0);
+            if(strlen(dir_entries[i].filename) > 0)
+            {
+                filler(buf, dir_entries[i].filename, NULL, 0);
+            }
         }
-    }
     
+    }
 
     return 0;
 
@@ -321,82 +325,6 @@ static int is_name_too_long(char* fname)
     return strlen(fname) > SFS_FILENAME_MAX;
 }
 
-/*
- * Create directory at `path`.
- * The `mode` argument describes the permissions, which you may ignore for this
- * assignment.
- * Returns 0 on success, < 0 on error.
- */
-static int sfs_mkdir(const char *path,
-                     mode_t mode)
-{
-    log("mkdir %s mode=%o\n", path, mode);
-
-    struct sfs_entry dir;
-    unsigned offset;
-    unsigned level;
-    int res = get_entry(path, &dir, &offset, &level);
-    log("level: %u\n", level);
-    if(res == 0) res = -EEXIST;
-    else
-    {
-        //get to current level
-        char* part = strtok(strdup(path), "/");
-        for(unsigned i = 1; i < level; i++) part = strtok(NULL, "/");
-
-        unsigned part_offset = 0;
-        blockidx_t* blck_tbl = malloc(SFS_BLOCKTBL_SIZE);
-        read_block_tbl(blck_tbl);
-        while((part = strtok(NULL, "/")))
-        {
-            log("looping");
-            if(is_name_too_long(part))
-            {
-                res = -ENAMETOOLONG;
-                break;
-            }
-
-            part_offset = find_free_entry(offset);
-            if(part_offset == 0)
-            {
-                res = -ENOBUFS;
-                break;
-            }
-
-            blockidx_t bl_first_half = 0;
-            
-            bl_first_half = find_free_block_pointer(bl_first_half, blck_tbl);
-            if(bl_first_half == SFS_BLOCKIDX_END || bl_first_half + 1 >= SFS_BLOCKTBL_NENTRIES) return -ENOBUFS;
-           
-            
-            strcpy(dir.filename, part);
-            dir.first_block = bl_first_half;
-            dir.size = SFS_DIRECTORY;
-
-            disk_write(&dir, sizeof(struct sfs_entry), part_offset);
-
-            blockidx_t entry_blocks[2] = {SFS_BLOCKIDX_END, SFS_BLOCKIDX_END};
-            disk_write(&entry_blocks, sizeof(blockidx_t) * 2, SFS_BLOCKTBL_OFF + bl_first_half * sizeof(blockidx_t));
-        }
-    }
-
-    return 0;
-}
-
-
-/*
- * Remove directory at `path`.
- * Directories may only be removed if they are empty, otherwise this function
- * should return -ENOTEMPTY.
- * Returns 0 on success, < 0 on error.
- */
-static int sfs_rmdir(const char *path)
-{
-    log("rmdir %s\n", path);
-
-    return -ENOSYS;
-}
-
 static void read_dir_path_and_fname(const char *path, char** ret_dir_path, char** ret_fname)
 {
     size_t dir_path_len = strlen(path) + 1;
@@ -416,6 +344,94 @@ static void read_dir_path_and_fname(const char *path, char** ret_dir_path, char*
     }
     
     *ret_dir_path = dir_path;
+}
+
+/*
+ * Create directory at `path`.
+ * The `mode` argument describes the permissions, which you may ignore for this
+ * assignment.
+ * Returns 0 on success, < 0 on error.
+ */
+static int sfs_mkdir(const char *path,
+                     mode_t mode)
+{
+    log("mkdir %s mode=%o\n", path, mode);
+
+    struct sfs_entry dir;
+    unsigned offset;
+    unsigned level;
+    int res = get_entry(path, &dir, &offset, &level);
+
+    if(res == 0) res = -EEXIST;
+    else
+    {
+        char* part;
+        char* rest;
+
+        read_dir_path_and_fname(path, &rest, &part);
+
+        log("part %s\n", part);
+
+        unsigned part_offset = 0;
+        blockidx_t* blck_tbl = malloc(SFS_BLOCKTBL_SIZE);
+        read_block_tbl(blck_tbl);
+        
+        if(is_name_too_long(part))
+        {
+            res = -ENAMETOOLONG;
+        }
+        else
+        {
+            part_offset = find_free_entry(offset);
+            if(part_offset == 0)
+            {
+                res = -ENOBUFS;
+            }
+            else
+            {
+                blockidx_t bl_first_half = 0;
+            
+                bl_first_half = find_free_block_pointer(bl_first_half, blck_tbl);
+                if(bl_first_half == SFS_BLOCKIDX_END || bl_first_half + 1 >= SFS_BLOCKTBL_NENTRIES) return -ENOBUFS;
+                
+                
+                strcpy(dir.filename, part);
+                dir.first_block = bl_first_half;
+                dir.size = SFS_DIRECTORY;
+
+                disk_write(&dir, sizeof(struct sfs_entry), part_offset);
+
+                struct sfs_entry empty_entry;
+                empty_entry.filename[0] = '\0';
+                empty_entry.first_block = SFS_BLOCKIDX_EMPTY;
+                empty_entry.size = 0;
+
+                unsigned new_dir_offset = SFS_DATA_OFF + bl_first_half * SFS_BLOCK_SIZE;
+                for(unsigned i = 0; i < SFS_DIR_NENTRIES; i++) 
+                {
+                    disk_write(&empty_entry, sizeof(struct sfs_entry), new_dir_offset + i * sizeof(struct sfs_entry));
+                }
+
+                blockidx_t entry_blocks[2] = {bl_first_half + 1, SFS_BLOCKIDX_END};
+                disk_write(&entry_blocks, sizeof(blockidx_t) * 2, SFS_BLOCKTBL_OFF + bl_first_half * sizeof(blockidx_t));
+            }
+        }    
+    }
+    return res;
+}
+
+
+/*
+ * Remove directory at `path`.
+ * Directories may only be removed if they are empty, otherwise this function
+ * should return -ENOTEMPTY.
+ * Returns 0 on success, < 0 on error.
+ */
+static int sfs_rmdir(const char *path)
+{
+    log("rmdir %s\n", path);
+
+    return -ENOSYS;
 }
 
 /*
