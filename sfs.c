@@ -270,12 +270,12 @@ static int sfs_read(const char *path,
     return res;
 }
 
-static struct sfs_entry* find_free_entry(unsigned offset)
+static struct sfs_entry find_free_entry(unsigned offset, unsigned *ret_offset)
 {
     unsigned entries_n = offset == SFS_ROOTDIR_NENTRIES ? SFS_ROOTDIR_NENTRIES : SFS_DIR_NENTRIES;
     unsigned entries_size = entries_n * sizeof(struct sfs_entry);
 
-    struct sfs_entry* entries = malloc(entries_size);
+    struct sfs_entry entries[entries_n];
     
     disk_read(entries, entries_size, offset);
 
@@ -283,10 +283,40 @@ static struct sfs_entry* find_free_entry(unsigned offset)
     {
         if(strlen(entries[i].filename) == 0)
         {
-            return &entries[i];
+            *ret_offset = offset +  i * sizeof(struct sfs_entry);
+            return entries[i];
         }
     }
-    return NULL;
+    *ret_offset = 0;
+    return entries[0];
+}
+
+static void read_block_tbl(blockidx_t* block_tbl)
+{
+    disk_read(block_tbl, SFS_BLOCKTBL_SIZE, SFS_BLOCKTBL_OFF);
+}
+
+static blockidx_t find_free_block_pointer(blockidx_t from, blockidx_t* block_tbl)
+{
+    if(block_tbl == NULL) {
+        blockidx_t b[SFS_BLOCKTBL_NENTRIES];
+        block_tbl = b;
+        read_block_tbl(block_tbl);
+    }
+    
+    for(blockidx_t i = from; i < SFS_BLOCKTBL_NENTRIES; i++)
+    {
+        if(block_tbl[i] == SFS_BLOCKIDX_EMPTY)
+        {
+            return i;
+        }
+    }
+    return SFS_BLOCKIDX_END;
+}
+
+static int is_name_too_long(char* fname)
+{
+    return strlen(fname) > SFS_FILENAME_MAX;
 }
 
 /*
@@ -302,16 +332,8 @@ static int sfs_mkdir(const char *path,
 
     // check if entry exists already
 
-    struct sfs_entry dir;
-    int res = get_entry(path, &dir, NULL);
 
-    if(res == 0) res = -EEXIST;
-    else
-    {
-        //create directory
-    }
-
-    return res;
+    return -ENOSYS;
 }
 
 
@@ -355,7 +377,59 @@ static int sfs_create(const char *path,
     (void)fi;
     log("create %s mode=%o\n", path, mode);
 
-    return -ENOSYS;
+    struct sfs_entry dir_file;
+    unsigned offset;
+
+    //build new path until last part
+    size_t path_len = strlen(path) + 1;
+    char dir_path[path_len];
+    bzero(dir_path, path_len);
+
+    char* part = strtok(strdup(path), "/");
+    strcpy(dir_path, part);
+    char* fname = part;
+
+    while((part = strtok(NULL, "/")))
+    {
+        strcat(dir_path, part);
+        fname = part;
+    }
+    
+    log("fname: %s\n", fname);
+    log("file dir: %s\n", dir_path);
+    if(is_name_too_long(fname)) return -1;
+
+    log("fname is not too long\n");
+
+    int res = get_entry(dir_path, &dir_file, &offset);
+    if(res == 0)
+    {
+        unsigned file_offset = 0;
+        struct sfs_entry entry = find_free_entry(offset, &file_offset);
+
+        if(file_offset == 0) res = -1;
+        else 
+        {
+            blockidx_t bl = 0;
+            bl = find_free_block_pointer(bl, NULL);
+
+            if(bl == SFS_BLOCKIDX_EMPTY) res = -1;
+            else
+            {
+                blockidx_t end = SFS_BLOCKIDX_END;
+                disk_write(&end, sizeof(blockidx_t), SFS_BLOCKTBL_OFF + bl * sizeof(blockidx_t));
+
+                entry.first_block = bl;
+                strcpy(entry.filename, fname);
+                entry.size = 0;
+                disk_write(&entry, sizeof(struct sfs_entry), file_offset);
+            }
+        }
+
+
+    }
+
+    return res;
 }
 
 
