@@ -346,7 +346,14 @@ static void read_dir_path_and_fname(const char *path, char** ret_dir_path, char*
     *ret_dir_path = dir_path;
 }
 
-
+struct sfs_entry empty_entry()
+{
+    struct sfs_entry empty_entry;
+    empty_entry.filename[0] = '\0';
+    empty_entry.first_block = SFS_BLOCKIDX_EMPTY;
+    empty_entry.size = 0;
+    return empty_entry;
+}
 
 /*
  * Create directory at `path`.
@@ -396,15 +403,12 @@ static int sfs_mkdir(const char *path,
 
             disk_write(&dir, sizeof(struct sfs_entry), part_offset);
 
-            struct sfs_entry empty_entry;
-            empty_entry.filename[0] = '\0';
-            empty_entry.first_block = SFS_BLOCKIDX_EMPTY;
-            empty_entry.size = 0;
+            struct sfs_entry empty = empty_entry();
 
             unsigned new_dir_offset = SFS_DATA_OFF + bl_first_half * SFS_BLOCK_SIZE;
             for(unsigned i = 0; i < SFS_DIR_NENTRIES; i++) 
             {
-                disk_write(&empty_entry, sizeof(struct sfs_entry), new_dir_offset + i * sizeof(struct sfs_entry));
+                disk_write(&empty, sizeof(struct sfs_entry), new_dir_offset + i * sizeof(struct sfs_entry));
             }
 
             blockidx_t entry_blocks[2] = {bl_first_half + 1, SFS_BLOCKIDX_END};
@@ -451,10 +455,9 @@ static int sfs_rmdir(const char *path)
         blockidx_t empty = SFS_BLOCKIDX_EMPTY;
         disk_write(&empty, sizeof(blockidx_t), SFS_BLOCKTBL_OFF + dir.first_block * sizeof(blockidx_t));
 
-        struct sfs_entry empty_entries[SFS_DIR_NENTRIES];
-        bzero(empty_entries, SFS_DIR_NENTRIES);
-
-        disk_write(empty_entries, SFS_DIR_SIZE, dir_offset);
+        struct sfs_entry empty = empty_entry();
+        disk_write(&empty, sizeof(struct sfs_entry), offset);
+        
     }
     else if(res == 0) res = -ENOTEMPTY;
 
