@@ -480,14 +480,14 @@ static int sfs_unlink(const char *path)
     if(res == 0 && !is_dir(file))
     {
         blockidx_t curr_block = file.first_block;
-        blockidx_t end = SFS_BLOCKIDX_END;
+        blockidx_t empty_block = SFS_BLOCKIDX_EMPTY;
 
         unsigned block_offset = 0;
         while(curr_block != SFS_BLOCKIDX_END)
         {
             block_offset = SFS_BLOCKTBL_OFF + curr_block * sizeof(blockidx_t);
             disk_read(&curr_block, sizeof(blockidx_t), block_offset);
-            disk_write(&end, sizeof(blockidx_t), block_offset);
+            disk_write(&empty_block, sizeof(blockidx_t), block_offset);
         }
 
         struct sfs_entry empty = empty_entry();
