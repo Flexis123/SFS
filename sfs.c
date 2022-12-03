@@ -56,32 +56,31 @@ struct sfs_entry find_entry(struct sfs_entry* entries, unsigned entries_n, char*
 }
 
 static int get_entry(const char *path, struct sfs_entry *ret_entry,
-                     unsigned *ret_entry_off, unsigned* ret_level_reached)
+                     unsigned *ret_dir_off, unsigned* ret_entry_off)
 {
     int res = 0;
+    int pos = -1;
 
     char* entry_fname = strtok(strdup(path), "/");
-    unsigned off = SFS_ROOTDIR_OFF;
-    unsigned level_reached = 0;
+    unsigned dir_off = SFS_ROOTDIR_OFF;
+    unsigned entry_off = dir_off;
 
     if(entry_fname != NULL)
     {
-        level_reached++;
-        int pos = 0;
 
         struct sfs_entry* entries = malloc(SFS_ROOTDIR_SIZE);
-        disk_read(entries, SFS_ROOTDIR_SIZE, off);
+        disk_read(entries, SFS_ROOTDIR_SIZE, dir_off);
         *ret_entry = find_entry(entries, SFS_ROOTDIR_NENTRIES, entry_fname, &pos);
 
         if(pos == -1) res = -ENOENT;
         else
         {
-            off = SFS_DATA_OFF + ret_entry->first_block * SFS_BLOCK_SIZE;
+            entry_off = dir_off + pos * sizeof(struct sfs_entry);
+            dir_off = SFS_DATA_OFF + ret_entry->first_block * SFS_BLOCK_SIZE;
         
             while((entry_fname = strtok(NULL, "/")))
             {
-                level_reached++;
-                disk_read(entries, SFS_DIR_SIZE, off);
+                disk_read(entries, SFS_DIR_SIZE, dir_off);
                 *ret_entry = find_entry(entries, SFS_DIR_NENTRIES, entry_fname, &pos);
 
                 if(pos == -1) 
@@ -89,7 +88,8 @@ static int get_entry(const char *path, struct sfs_entry *ret_entry,
                     res = -ENOENT;
                     break;
                 }
-                off = SFS_DATA_OFF + ret_entry->first_block * SFS_BLOCK_SIZE;
+                entry_off = dir_off + pos * sizeof(struct sfs_entry);
+                dir_off = SFS_DATA_OFF + ret_entry->first_block * SFS_BLOCK_SIZE;
             }
         }
     }
@@ -100,8 +100,8 @@ static int get_entry(const char *path, struct sfs_entry *ret_entry,
         strcpy(ret_entry->filename, "/");
     }
 
-    if(ret_entry_off != NULL) *ret_entry_off = off;
-    if(ret_level_reached != NULL) *ret_level_reached = level_reached;
+    if(ret_dir_off != NULL) *ret_dir_off = dir_off;
+    if(ret_entry_off != NULL) *ret_entry_off = entry_off;
     
     return res;
 }
@@ -374,8 +374,7 @@ static int sfs_mkdir(const char *path,
     
     struct sfs_entry dir;
     unsigned offset;
-    unsigned level;
-    int res = get_entry(path, &dir, &offset, &level);
+    int res = get_entry(path, &dir, &offset, NULL);
 
     if(res == 0) res = -EEXIST;
     else
@@ -431,14 +430,13 @@ static int sfs_rmdir(const char *path)
     log("rmdir %s\n", path);
 
     struct sfs_entry dir;
-    unsigned offset = 0;
+    unsigned dir_offset = 0;
+    unsigned entry_offset = 0;
 
-    int res = get_entry(path, &dir, &offset, NULL);
+    int res = get_entry(path, &dir, &dir_offset, &entry_offset);
 
     int is_empty = 1;
     struct sfs_entry* dir_entries = malloc(SFS_DIR_SIZE);
-    
-    unsigned dir_offset = SFS_DATA_OFF + dir.first_block * SFS_BLOCK_SIZE;
     disk_read(dir_entries, SFS_DIR_SIZE, dir_offset);
 
     for(unsigned i = 0; i < SFS_DIR_NENTRIES; i++)
@@ -452,12 +450,12 @@ static int sfs_rmdir(const char *path)
 
     if(res == 0 && is_empty)
     {
-        blockidx_t empty = SFS_BLOCKIDX_EMPTY;
-        disk_write(&empty, sizeof(blockidx_t), SFS_BLOCKTBL_OFF + dir.first_block * sizeof(blockidx_t));
+        blockidx_t empty_dir_blocks[2] = {SFS_BLOCKIDX_EMPTY, SFS_BLOCKIDX_EMPTY};
+        disk_write(&empty_dir_blocks, sizeof(blockidx_t) * 2, SFS_BLOCKTBL_OFF + dir.first_block * sizeof(blockidx_t));
 
-        struct sfs_entry empty = empty_entry();
-        disk_write(&empty, sizeof(struct sfs_entry), offset);
-        
+        struct sfs_entry empty_en = empty_entry();
+        log("entry offset %u\n", entry_offset);
+        disk_write(&empty_en, sizeof(struct sfs_entry), entry_offset);
     }
     else if(res == 0) res = -ENOTEMPTY;
 
