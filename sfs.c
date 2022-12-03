@@ -106,6 +106,10 @@ static int get_entry(const char *path, struct sfs_entry *ret_entry,
     return res;
 }
 
+int is_dir(struct sfs_entry en)
+{
+    return en.size & SFS_DIRECTORY;
+}
 
 /*
  * Retrieve information about a file or directory.
@@ -140,8 +144,7 @@ static int sfs_getattr(const char *path,
     if (res == 0) 
     {
         // check if its a directory or a file;
-        int is_dir = entry.size & SFS_DIRECTORY;
-        if(is_dir)
+        if(is_dir(entry))
         {
             st->st_mode = S_IFDIR | BASE_PERMS;
             st->st_nlink = 2;
@@ -156,7 +159,6 @@ static int sfs_getattr(const char *path,
 
     return res;
 }
-
 
 /*
  * Return directory contents for `path`. This function should simply fill the
@@ -471,7 +473,30 @@ static int sfs_unlink(const char *path)
 {
     log("unlink %s\n", path);
 
-    return -ENOSYS;
+    struct sfs_entry file;
+    unsigned file_offset = 0;
+
+    int res = get_entry(path, &file, NULL, &file_offset);
+    if(res == 0 && !is_dir(file))
+    {
+        blockidx_t curr_block = file.first_block;
+        blockidx_t end = SFS_BLOCKIDX_END;
+
+        unsigned block_offset = 0;
+        while(curr_block != SFS_BLOCKIDX_END)
+        {
+            block_offset = SFS_BLOCKTBL_OFF + curr_block * sizeof(blockidx_t);
+            disk_read(&curr_block, sizeof(blockidx_t), block_offset);
+            disk_write(&end, sizeof(blockidx_t), block_offset);
+        }
+
+        struct sfs_entry empty = empty_entry();
+        disk_write(&empty, sizeof(struct sfs_entry), file_offset);
+    }
+    else if(is_dir(file)) res = -EISDIR;
+    
+
+    return res;
 }
 
 
