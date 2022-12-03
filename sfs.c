@@ -366,25 +366,25 @@ static int sfs_mkdir(const char *path,
 {
     log("mkdir %s mode=%o\n", path, mode);
 
-    char* part;
+    char* new_dir;
     char* dir_path;
 
-    read_dir_path_and_fname(path, &dir_path, &part);
-    if(is_name_too_long(part)) return -ENAMETOOLONG;
+    read_dir_path_and_fname(path, &dir_path, &new_dir);
+    if(is_name_too_long(new_dir)) return -ENAMETOOLONG;
     
     struct sfs_entry dir;
-    unsigned offset;
-    int res = get_entry(path, &dir, &offset, NULL);
+    unsigned dir_offset;
+    int res = get_entry(path, &dir, &dir_offset, NULL);
 
     if(res == 0) res = -EEXIST;
     else
     {
-        unsigned part_offset = 0;
+        unsigned new_dir_entry_offset = 0;
         blockidx_t* blck_tbl = malloc(SFS_BLOCKTBL_SIZE);
         read_block_tbl(blck_tbl);
         
-        part_offset = find_free_entry(offset);
-        if(part_offset == 0)
+        new_dir_entry_offset = find_free_entry(dir_offset);
+        if(new_dir_entry_offset == 0)
         {
             res = -ENOBUFS;
         }
@@ -396,11 +396,11 @@ static int sfs_mkdir(const char *path,
             if(bl_first_half == SFS_BLOCKIDX_END || bl_first_half + 1 >= SFS_BLOCKTBL_NENTRIES) return -ENOBUFS;
             
             
-            strcpy(dir.filename, part);
+            strcpy(dir.filename, new_dir);
             dir.first_block = bl_first_half;
             dir.size = SFS_DIRECTORY;
 
-            disk_write(&dir, sizeof(struct sfs_entry), part_offset);
+            disk_write(&dir, sizeof(struct sfs_entry), new_dir_entry_offset);
 
             struct sfs_entry empty = empty_entry();
 
@@ -489,17 +489,17 @@ static int sfs_create(const char *path,
     log("create %s mode=%o\n", path, mode);
 
     struct sfs_entry dir_file;
-    unsigned offset;
+    unsigned dir_offset;
     char* fname = NULL;
     char* dir_path = NULL;
 
     read_dir_path_and_fname(path, &dir_path, &fname);
     if(is_name_too_long(fname)) return -ENAMETOOLONG;
 
-    int res = get_entry(dir_path, &dir_file, &offset, NULL);
+    int res = get_entry(dir_path, &dir_file, &dir_offset, NULL);
     if(res == 0)
     {
-        unsigned file_offset = find_free_entry(offset);
+        unsigned file_offset = find_free_entry(dir_offset);
 
         if(file_offset == 0) res = -1;
         else 
