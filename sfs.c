@@ -211,6 +211,7 @@ static int sfs_readdir(const char *path,
 }
 
 
+
 /*
  * Read contents of `path` into `buf` for  up to `size` bytes.
  * Note that `size` may be bigger than the file actually is.
@@ -322,7 +323,7 @@ static blockidx_t find_free_block_pointer(blockidx_t from, blockidx_t* block_tbl
 
 static int is_name_too_long(char* fname)
 {
-    return strlen(fname) > SFS_FILENAME_MAX;
+    return strlen(fname) > SFS_FILENAME_MAX - 1;
 }
 
 static void read_dir_path_and_fname(const char *path, char** ret_dir_path, char** ret_fname)
@@ -394,7 +395,6 @@ static int sfs_mkdir(const char *path,
         
             bl_first_half = find_free_block_pointer(bl_first_half, blck_tbl);
             if(bl_first_half == SFS_BLOCKIDX_END || bl_first_half + 1 >= SFS_BLOCKTBL_NENTRIES) return -ENOBUFS;
-            
             
             strcpy(dir.filename, new_dir);
             dir.first_block = bl_first_half;

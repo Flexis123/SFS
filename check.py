@@ -707,6 +707,8 @@ class Filesystem:
         path = self.get_image_path(path, is_dir=True)
         hostpath = self.get_host_path(path)
 
+        print(f"path: {path}")
+        print(f"hostpath: {path}")
         os.makedirs(hostpath, exist_ok=True)
         self.add_intermediate_dirs(path)
 
